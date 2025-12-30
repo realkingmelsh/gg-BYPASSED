@@ -1,0 +1,1505 @@
+-- ==========================================
+-- SCRIPT 1
+-- ==========================================
+do
+    print("--- Starting Script 1 ---")
+    
+    -- PASTE CONTENT OF SCRIPT 1 BELOW THIS LINE
+	loadstring(game:HttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source"))()
+execCmd("animation 93224413172183")
+    
+    -- PASTE CONTENT OF SCRIPT 1 ABOVE THIS LINE
+    print("--- Script 1 Finished ---")
+end
+
+-- ==========================================
+-- SCRIPT 2
+-- ==========================================
+do
+    print("--- Starting Script 2 ---")
+    
+    -- PASTE CONTENT OF SCRIPT 2 BELOW THIS LINE
+	-- Animation Speed Controller + Capture/Saved Animations (RESPAWN-SAFE)
+-- LOCKED POSITION (unmovable + stays in same spot after respawn)
+-- PRESS "-" TO HIDE/UNHIDE UI
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local MarketplaceService = game:GetService("MarketplaceService")
+
+local player = Players.LocalPlayer
+
+-- Cleanup if re-ran
+local CLEAN_KEY = "__AnimSpeedCaptureUI_Cleanup"
+local env = (getgenv and getgenv()) or _G
+if env[CLEAN_KEY] then
+    pcall(env[CLEAN_KEY])
+end
+
+-- ===================== LOCKED UI POSITION =====================
+local LOCKED_X = 980
+local LOCKED_Y = 553
+
+local FRAME_W = 380
+local FRAME_H = 310
+
+local function getLockedPos()
+    local cam = workspace.CurrentCamera
+    if cam then
+        local vs = cam.ViewportSize
+        local x = math.clamp(LOCKED_X, 0, math.max(0, vs.X - FRAME_W))
+        local y = math.clamp(LOCKED_Y, 0, math.max(0, vs.Y - FRAME_H))
+        return UDim2.fromOffset(x, y)
+    end
+    return UDim2.fromOffset(LOCKED_X, LOCKED_Y)
+end
+-- =============================================================
+
+-- ===================== State =====================
+local speedAbs = 0.0001
+local paused = false
+local direction = 1 -- 1 = forward, -1 = reverse
+local uiVisible = true
+
+local savedAnimations = {}        -- array of {id=..., name=...}
+local savedIndexById = {}         -- id -> index
+local selectedAnimId = nil
+
+-- ===================== Runtime =====================
+local gui, frame, listFrame, statusLabel, speedBox, pauseBtn, dirBtn
+local humanoid, animator
+local currentTrack
+
+local conns = {}
+local function addConn(c) table.insert(conns, c) return c end
+local function disconnectAll()
+    for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+    table.clear(conns)
+end
+
+local function setUIVisible(v)
+    uiVisible = v
+    if frame then
+        frame.Visible = uiVisible
+    end
+end
+
+local function toggleUI()
+    setUIVisible(not uiVisible)
+end
+
+local function normalizeAnimId(raw)
+    if type(raw) ~= "string" then return nil end
+    local digits = raw:match("%d+")
+    if not digits then return nil end
+    return "rbxassetid://" .. digits
+end
+
+local function appliedSpeed()
+    if paused then return 0 end
+    return direction * speedAbs
+end
+
+local function applyToAllTracks()
+    if not animator then return end
+    local s = appliedSpeed()
+    for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
+        pcall(function() t:AdjustSpeed(s) end)
+    end
+end
+
+local function refreshStatus()
+    if not statusLabel then return end
+    local dirText = (direction == 1) and "Forward" or "Reverse"
+    local playText = paused and "Paused" or "Playing"
+    statusLabel.Text = string.format("State: %s | Dir: %s | Applied: %.6f", playText, dirText, appliedSpeed())
+end
+
+local function setPauseButtonText()
+    if pauseBtn then pauseBtn.Text = paused and "Play" or "Pause" end
+end
+
+local function setDirButtonText()
+    if dirBtn then dirBtn.Text = (direction == 1) and "Forward" or "Reverse" end
+end
+
+local function setButtonHighlight()
+    if not listFrame then return end
+    for _, child in ipairs(listFrame:GetChildren()) do
+        if child:IsA("TextButton") then
+            local id = child:GetAttribute("AnimId")
+            if id == selectedAnimId then
+                child.BackgroundColor3 = Color3.fromRGB(70, 140, 70)
+            else
+                child.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+            end
+        end
+    end
+end
+
+local function tryGetAnimName(id)
+    local digits = id:match("%d+")
+    if not digits then return "Animation" end
+    local ok, info = pcall(function()
+        return MarketplaceService:GetProductInfo(tonumber(digits))
+    end)
+    if ok and info and info.Name then
+        return tostring(info.Name)
+    end
+    return "Animation " .. digits
+end
+
+local function playSavedAnimation(id)
+    if not humanoid or not animator then return end
+    if not id then return end
+
+    selectedAnimId = id
+    setButtonHighlight()
+
+    if currentTrack then
+        pcall(function() currentTrack:Stop(0.05) end)
+        currentTrack = nil
+    end
+
+    local animObj = Instance.new("Animation")
+    animObj.AnimationId = id
+
+    local ok, track = pcall(function()
+        return humanoid:LoadAnimation(animObj)
+    end)
+    if not ok or not track then
+        warn("Failed to load:", id)
+        return
+    end
+
+    currentTrack = track
+    pcall(function()
+        currentTrack.Looped = true
+        currentTrack.Priority = Enum.AnimationPriority.Action
+        currentTrack:Play(0.05)
+    end)
+
+    applyToAllTracks()
+    refreshStatus()
+end
+
+local function createSavedButton(entry)
+    if not listFrame or not entry or not entry.id then return end
+
+    for _, child in ipairs(listFrame:GetChildren()) do
+        if child:IsA("TextButton") and child:GetAttribute("AnimId") == entry.id then
+            return
+        end
+    end
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -10, 0, 34)
+    btn.BorderSizePixel = 0
+    btn.BackgroundColor3 = Color3.fromRGB(55, 55, 55)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.Gotham
+    btn.TextSize = 14
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    btn.Text = "  " .. (entry.name or entry.id)
+    btn.Parent = listFrame
+    btn:SetAttribute("AnimId", entry.id)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
+
+    addConn(btn.MouseButton1Click:Connect(function()
+        playSavedAnimation(entry.id)
+    end))
+
+    setButtonHighlight()
+end
+
+local function addSavedAnimation(id)
+    if not id or savedIndexById[id] then return end
+
+    local name = tryGetAnimName(id)
+    local entry = { id = id, name = name }
+
+    table.insert(savedAnimations, entry)
+    savedIndexById[id] = #savedAnimations
+
+    createSavedButton(entry)
+end
+
+local function captureCurrentAnimation()
+    if not humanoid then return end
+    local tracks = humanoid:GetPlayingAnimationTracks()
+    if #tracks == 0 then return end
+
+    local best = tracks[1]
+    local bestWeight = -math.huge
+    for _, t in ipairs(tracks) do
+        local w = 0
+        pcall(function() w = t.WeightCurrent end)
+        if t.Length ~= 0 and w > bestWeight and t.Animation and t.Animation.AnimationId then
+            best = t
+            bestWeight = w
+        end
+    end
+
+    if best and best.Animation and best.Animation.AnimationId then
+        local id = normalizeAnimId(best.Animation.AnimationId)
+        if id then
+            addSavedAnimation(id)
+        end
+    end
+end
+
+-- ===================== UI =====================
+local function lockFrameHard()
+    if not frame then return end
+
+    frame.Active = false
+    frame.Draggable = false
+
+    local guarding = false
+    local function enforce()
+        if guarding or not frame then return end
+        guarding = true
+        frame.AnchorPoint = Vector2.new(0, 0)
+        frame.Size = UDim2.fromOffset(FRAME_W, FRAME_H)
+        frame.Position = getLockedPos()
+        guarding = false
+    end
+
+    enforce()
+    addConn(frame:GetPropertyChangedSignal("Position"):Connect(enforce))
+    addConn(frame:GetPropertyChangedSignal("AnchorPoint"):Connect(enforce))
+    addConn(frame:GetPropertyChangedSignal("Size"):Connect(enforce))
+
+    local cam = workspace.CurrentCamera
+    if cam then
+        addConn(cam:GetPropertyChangedSignal("ViewportSize"):Connect(enforce))
+    end
+end
+
+local function bindToggleKey()
+    addConn(UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if UserInputService:GetFocusedTextBox() then return end
+
+        if input.KeyCode == Enum.KeyCode.Minus or input.KeyCode == Enum.KeyCode.KeypadMinus then
+            toggleUI()
+        end
+    end))
+end
+
+local function buildUI()
+    local pg = player:WaitForChild("PlayerGui")
+    local old = pg:FindFirstChild("AnimSpeedCaptureUI")
+    if old then old:Destroy() end
+
+    gui = Instance.new("ScreenGui")
+    gui.Name = "AnimSpeedCaptureUI"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.Parent = pg
+
+    frame = Instance.new("Frame")
+    frame.Size = UDim2.fromOffset(FRAME_W, FRAME_H)
+    frame.Position = getLockedPos()
+    frame.AnchorPoint = Vector2.new(0, 0)
+    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    frame.BorderSizePixel = 0
+    frame.Visible = uiVisible
+    frame.Parent = gui
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 14)
+    Instance.new("UIStroke", frame).Thickness = 2
+
+    -- HARD LOCK: unmovable + always snaps back to the locked position
+    lockFrameHard()
+
+    -- "-" toggle (respawn-safe because we rebuild + rebind after disconnectAll)
+    bindToggleKey()
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 34)
+    title.BackgroundTransparency = 1
+    title.Text = "Animation Speed Controller"
+    title.TextScaled = true
+    title.Font = Enum.Font.GothamBold
+    title.TextColor3 = Color3.new(1, 1, 1)
+    title.Parent = frame
+
+    local speedLabel = Instance.new("TextLabel")
+    speedLabel.Size = UDim2.new(1, -20, 0, 18)
+    speedLabel.Position = UDim2.new(0, 10, 0, 38)
+    speedLabel.BackgroundTransparency = 1
+    speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+    speedLabel.Text = "Speed"
+    speedLabel.Font = Enum.Font.Gotham
+    speedLabel.TextSize = 14
+    speedLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+    speedLabel.Parent = frame
+
+    speedBox = Instance.new("TextBox")
+    speedBox.Size = UDim2.new(1, -120, 0, 32)
+    speedBox.Position = UDim2.new(0, 10, 0, 58)
+    speedBox.Text = tostring(speedAbs)
+    speedBox.ClearTextOnFocus = false
+    speedBox.Font = Enum.Font.Gotham
+    speedBox.TextSize = 16
+    speedBox.TextColor3 = Color3.new(1, 1, 1)
+    speedBox.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    speedBox.BorderSizePixel = 0
+    speedBox.Parent = frame
+    Instance.new("UICorner", speedBox).CornerRadius = UDim.new(0, 10)
+
+    local applyBtn = Instance.new("TextButton")
+    applyBtn.Size = UDim2.new(0, 90, 0, 32)
+    applyBtn.Position = UDim2.new(1, -100, 0, 58)
+    applyBtn.Text = "Apply"
+    applyBtn.Font = Enum.Font.GothamBold
+    applyBtn.TextSize = 16
+    applyBtn.TextColor3 = Color3.new(1, 1, 1)
+    applyBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 50)
+    applyBtn.BorderSizePixel = 0
+    applyBtn.Parent = frame
+    Instance.new("UICorner", applyBtn).CornerRadius = UDim.new(0, 10)
+
+    statusLabel = Instance.new("TextLabel")
+    statusLabel.Size = UDim2.new(1, -20, 0, 22)
+    statusLabel.Position = UDim2.new(0, 10, 0, 96)
+    statusLabel.BackgroundTransparency = 1
+    statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+    statusLabel.Font = Enum.Font.Gotham
+    statusLabel.TextSize = 14
+    statusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    statusLabel.Parent = frame
+
+    local captureBtn = Instance.new("TextButton")
+    captureBtn.Size = UDim2.new(1, -20, 0, 34)
+    captureBtn.Position = UDim2.new(0, 10, 0, 122)
+    captureBtn.Text = "Capture Current Animation"
+    captureBtn.Font = Enum.Font.GothamBold
+    captureBtn.TextSize = 16
+    captureBtn.TextColor3 = Color3.new(1, 1, 1)
+    captureBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+    captureBtn.BorderSizePixel = 0
+    captureBtn.Parent = frame
+    Instance.new("UICorner", captureBtn).CornerRadius = UDim.new(0, 12)
+
+    listFrame = Instance.new("ScrollingFrame")
+    listFrame.Size = UDim2.new(1, -20, 0, 92)
+    listFrame.Position = UDim2.new(0, 10, 0, 162)
+    listFrame.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+    listFrame.BorderSizePixel = 0
+    listFrame.ScrollBarThickness = 6
+    listFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+    listFrame.Parent = frame
+    Instance.new("UICorner", listFrame).CornerRadius = UDim.new(0, 12)
+
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 6)
+    layout.Parent = listFrame
+    addConn(layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        listFrame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 8)
+    end))
+
+    pauseBtn = Instance.new("TextButton")
+    pauseBtn.Size = UDim2.new(0.5, -15, 0, 44)
+    pauseBtn.Position = UDim2.new(0, 10, 1, -54)
+    pauseBtn.Font = Enum.Font.GothamBold
+    pauseBtn.TextSize = 16
+    pauseBtn.TextColor3 = Color3.new(1, 1, 1)
+    pauseBtn.BackgroundColor3 = Color3.fromRGB(140, 90, 40)
+    pauseBtn.BorderSizePixel = 0
+    pauseBtn.Parent = frame
+    Instance.new("UICorner", pauseBtn).CornerRadius = UDim.new(0, 12)
+
+    dirBtn = Instance.new("TextButton")
+    dirBtn.Size = UDim2.new(0.5, -15, 0, 44)
+    dirBtn.Position = UDim2.new(0.5, 5, 1, -54)
+    dirBtn.Font = Enum.Font.GothamBold
+    dirBtn.TextSize = 16
+    dirBtn.TextColor3 = Color3.new(1, 1, 1)
+    dirBtn.BackgroundColor3 = Color3.fromRGB(60, 90, 140)
+    dirBtn.BorderSizePixel = 0
+    dirBtn.Parent = frame
+    Instance.new("UICorner", dirBtn).CornerRadius = UDim.new(0, 12)
+
+    -- events
+    addConn(applyBtn.MouseButton1Click:Connect(function()
+        local n = tonumber(speedBox.Text)
+        if not n then return end
+        speedAbs = math.abs(n)
+        applyToAllTracks()
+        refreshStatus()
+    end))
+
+    addConn(captureBtn.MouseButton1Click:Connect(function()
+        captureCurrentAnimation()
+    end))
+
+    addConn(pauseBtn.MouseButton1Click:Connect(function()
+        paused = not paused
+        setPauseButtonText()
+        applyToAllTracks()
+        refreshStatus()
+    end))
+
+    addConn(dirBtn.MouseButton1Click:Connect(function()
+        direction = (direction == 1) and -1 or 1
+        setDirButtonText()
+        applyToAllTracks()
+        refreshStatus()
+    end))
+
+    for _, entry in ipairs(savedAnimations) do
+        createSavedButton(entry)
+    end
+
+    setPauseButtonText()
+    setDirButtonText()
+    refreshStatus()
+end
+
+local function bindCharacter()
+    local char = player.Character or player.CharacterAdded:Wait()
+    humanoid = char:WaitForChild("Humanoid")
+    animator = humanoid:WaitForChild("Animator")
+
+    addConn(animator.AnimationPlayed:Connect(function(track)
+        task.defer(function()
+            pcall(function() track:AdjustSpeed(appliedSpeed()) end)
+        end)
+    end))
+
+    task.defer(function()
+        applyToAllTracks()
+        if selectedAnimId then
+            playSavedAnimation(selectedAnimId)
+        end
+    end)
+end
+
+-- ===================== INIT & RESPAWN =====================
+buildUI()
+bindCharacter()
+
+local respawnConn
+respawnConn = player.CharacterAdded:Connect(function()
+    disconnectAll()
+    buildUI()
+    bindCharacter()
+end)
+
+env[CLEAN_KEY] = function()
+    disconnectAll()
+    if respawnConn then pcall(function() respawnConn:Disconnect() end) end
+    if gui and gui.Parent then pcall(function() gui:Destroy() end) end
+end
+    
+    
+    -- PASTE CONTENT OF SCRIPT 2 ABOVE THIS LINE
+    print("--- Script 2 Finished ---")
+end
+
+-- ==========================================
+-- SCRIPT 3
+-- ==========================================
+do
+    print("--- Starting Script 3 ---")
+    
+    -- PASTE CONTENT OF SCRIPT 3 BELOW THIS LINE
+	------------------------------------------------------------------------
+-- Freecam
+-- Cinematic free camera for spectating and video production.
+------------------------------------------------------------------------
+
+local pi    = math.pi
+local abs   = math.abs
+local clamp = math.clamp
+local exp   = math.exp
+local rad   = math.rad
+local sign  = math.sign
+local sqrt  = math.sqrt
+local tan   = math.tan
+
+local ContextActionService = game:GetService("ContextActionService")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+	Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+	LocalPlayer = Players.LocalPlayer
+end
+
+local Camera = Workspace.CurrentCamera
+Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+	local newCamera = Workspace.CurrentCamera
+	if newCamera then
+		Camera = newCamera
+	end
+end)
+
+------------------------------------------------------------------------
+
+local TOGGLE_INPUT_PRIORITY = Enum.ContextActionPriority.Low.Value
+local INPUT_PRIORITY = Enum.ContextActionPriority.High.Value
+local FREECAM_MACRO_KB = {Enum.KeyCode.LeftShift, Enum.KeyCode.P}
+
+local NAV_GAIN = Vector3.new(1, 1, 1)*64
+local PAN_GAIN = Vector2.new(0.75, 1)*8
+local FOV_GAIN = 300
+
+local PITCH_LIMIT = rad(90)
+
+local VEL_STIFFNESS = 1.5
+local PAN_STIFFNESS = 1.0
+local FOV_STIFFNESS = 4.0
+
+------------------------------------------------------------------------
+
+local Spring = {} do
+	Spring.__index = Spring
+
+	function Spring.new(freq, pos)
+		local self = setmetatable({}, Spring)
+		self.f = freq
+		self.p = pos
+		self.v = pos*0
+		return self
+	end
+
+	function Spring:Update(dt, goal)
+		local f = self.f*2*pi
+		local p0 = self.p
+		local v0 = self.v
+
+		local offset = goal - p0
+		local decay = exp(-f*dt)
+
+		local p1 = goal + (v0*dt - offset*(f*dt + 1))*decay
+		local v1 = (f*dt*(offset*f - v0) + v0)*decay
+
+		self.p = p1
+		self.v = v1
+
+		return p1
+	end
+
+	function Spring:Reset(pos)
+		self.p = pos
+		self.v = pos*0
+	end
+end
+
+------------------------------------------------------------------------
+
+local cameraPos = Vector3.new()
+local cameraRot = Vector2.new()
+local cameraFov = 0
+
+local velSpring = Spring.new(VEL_STIFFNESS, Vector3.new())
+local panSpring = Spring.new(PAN_STIFFNESS, Vector2.new())
+local fovSpring = Spring.new(FOV_STIFFNESS, 0)
+
+------------------------------------------------------------------------
+
+local Input = {} do
+	local thumbstickCurve do
+		local K_CURVATURE = 2.0
+		local K_DEADZONE = 0.15
+
+		local function fCurve(x)
+			return (exp(K_CURVATURE*x) - 1)/(exp(K_CURVATURE) - 1)
+		end
+
+		local function fDeadzone(x)
+			return fCurve((x - K_DEADZONE)/(1 - K_DEADZONE))
+		end
+
+		function thumbstickCurve(x)
+			return sign(x)*clamp(fDeadzone(abs(x)), 0, 1)
+		end
+	end
+
+	local gamepad = {
+		ButtonX = 0,
+		ButtonY = 0,
+		DPadDown = 0,
+		DPadUp = 0,
+		ButtonL2 = 0,
+		ButtonR2 = 0,
+		Thumbstick1 = Vector2.new(),
+		Thumbstick2 = Vector2.new(),
+	}
+
+	local keyboard = {
+		W = 0,
+		A = 0,
+		S = 0,
+		D = 0,
+		E = 0,
+		Q = 0,
+		U = 0,
+		H = 0,
+		J = 0,
+		K = 0,
+		I = 0,
+		Y = 0,
+		Up = 0,
+		Down = 0,
+		LeftShift = 0,
+		RightShift = 0,
+	}
+
+	local mouse = {
+		Delta = Vector2.new(),
+		MouseWheel = 0,
+	}
+
+	local NAV_GAMEPAD_SPEED  = Vector3.new(1, 1, 1)
+	local NAV_KEYBOARD_SPEED = Vector3.new(1, 1, 1)
+	local PAN_MOUSE_SPEED    = Vector2.new(1, 1)*(pi/64)
+	local PAN_GAMEPAD_SPEED  = Vector2.new(1, 1)*(pi/8)
+	local FOV_WHEEL_SPEED    = 1.0
+	local FOV_GAMEPAD_SPEED  = 0.25
+	local NAV_ADJ_SPEED      = 0.75
+	local NAV_SHIFT_MUL      = 0.25
+
+	local navSpeed = 1
+
+	function Input.Vel(dt)
+		navSpeed = clamp(navSpeed + dt*(keyboard.Up - keyboard.Down)*NAV_ADJ_SPEED, 0.01, 4)
+
+		local kGamepad = Vector3.new(
+			thumbstickCurve(gamepad.Thumbstick1.x),
+			thumbstickCurve(gamepad.ButtonR2) - thumbstickCurve(gamepad.ButtonL2),
+			thumbstickCurve(-gamepad.Thumbstick1.y)
+		)*NAV_GAMEPAD_SPEED
+
+		local kKeyboard = Vector3.new(
+			keyboard.D - keyboard.A + keyboard.K - keyboard.H,
+			keyboard.E - keyboard.Q + keyboard.I - keyboard.Y,
+			keyboard.S - keyboard.W + keyboard.J - keyboard.U
+		)*NAV_KEYBOARD_SPEED
+
+		local shift = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+
+		return (kGamepad + kKeyboard)*(navSpeed*(shift and NAV_SHIFT_MUL or 1))
+	end
+
+	function Input.Pan(dt)
+		local kGamepad = Vector2.new(
+			thumbstickCurve(gamepad.Thumbstick2.y),
+			thumbstickCurve(-gamepad.Thumbstick2.x)
+		)*PAN_GAMEPAD_SPEED
+		local kMouse = mouse.Delta*PAN_MOUSE_SPEED
+		mouse.Delta = Vector2.new()
+		return kGamepad + kMouse
+	end
+
+	function Input.Fov(dt)
+		local kGamepad = (gamepad.ButtonX - gamepad.ButtonY)*FOV_GAMEPAD_SPEED
+		local kMouse = mouse.MouseWheel*FOV_WHEEL_SPEED
+		mouse.MouseWheel = 0
+		return kGamepad + kMouse
+	end
+
+	do
+		local function Keypress(action, state, input)
+			keyboard[input.KeyCode.Name] = state == Enum.UserInputState.Begin and 1 or 0
+			return Enum.ContextActionResult.Sink
+		end
+
+		local function GpButton(action, state, input)
+			gamepad[input.KeyCode.Name] = state == Enum.UserInputState.Begin and 1 or 0
+			return Enum.ContextActionResult.Sink
+		end
+
+		local function MousePan(action, state, input)
+			local delta = input.Delta
+			mouse.Delta = Vector2.new(-delta.y, -delta.x)
+			return Enum.ContextActionResult.Sink
+		end
+
+		local function Thumb(action, state, input)
+			gamepad[input.KeyCode.Name] = input.Position
+			return Enum.ContextActionResult.Sink
+		end
+
+		local function Trigger(action, state, input)
+			gamepad[input.KeyCode.Name] = input.Position.z
+			return Enum.ContextActionResult.Sink
+		end
+
+		local function MouseWheel(action, state, input)
+			mouse[input.UserInputType.Name] = -input.Position.z
+			return Enum.ContextActionResult.Sink
+		end
+
+		local function Zero(t)
+			for k, v in pairs(t) do
+				t[k] = v*0
+			end
+		end
+
+		function Input.StartCapture()
+			ContextActionService:BindActionAtPriority("FreecamKeyboard", Keypress, false, INPUT_PRIORITY,
+				Enum.KeyCode.W, Enum.KeyCode.U,
+				Enum.KeyCode.A, Enum.KeyCode.H,
+				Enum.KeyCode.S, Enum.KeyCode.J,
+				Enum.KeyCode.D, Enum.KeyCode.K,
+				Enum.KeyCode.E, Enum.KeyCode.I,
+				Enum.KeyCode.Q, Enum.KeyCode.Y,
+				Enum.KeyCode.Up, Enum.KeyCode.Down
+			)
+			ContextActionService:BindActionAtPriority("FreecamMousePan",          MousePan,   false, INPUT_PRIORITY, Enum.UserInputType.MouseMovement)
+			ContextActionService:BindActionAtPriority("FreecamMouseWheel",        MouseWheel, false, INPUT_PRIORITY, Enum.UserInputType.MouseWheel)
+			ContextActionService:BindActionAtPriority("FreecamGamepadButton",     GpButton,   false, INPUT_PRIORITY, Enum.KeyCode.ButtonX, Enum.KeyCode.ButtonY)
+			ContextActionService:BindActionAtPriority("FreecamGamepadTrigger",    Trigger,    false, INPUT_PRIORITY, Enum.KeyCode.ButtonR2, Enum.KeyCode.ButtonL2)
+			ContextActionService:BindActionAtPriority("FreecamGamepadThumbstick", Thumb,      false, INPUT_PRIORITY, Enum.KeyCode.Thumbstick1, Enum.KeyCode.Thumbstick2)
+		end
+
+		function Input.StopCapture()
+			navSpeed = 1
+			Zero(gamepad)
+			Zero(keyboard)
+			Zero(mouse)
+			ContextActionService:UnbindAction("FreecamKeyboard")
+			ContextActionService:UnbindAction("FreecamMousePan")
+			ContextActionService:UnbindAction("FreecamMouseWheel")
+			ContextActionService:UnbindAction("FreecamGamepadButton")
+			ContextActionService:UnbindAction("FreecamGamepadTrigger")
+			ContextActionService:UnbindAction("FreecamGamepadThumbstick")
+		end
+	end
+end
+
+local function GetFocusDistance(cameraFrame)
+	local znear = 0.1
+	local viewport = Camera.ViewportSize
+	local projy = 2*tan(cameraFov/2)
+	local projx = viewport.x/viewport.y*projy
+	local fx = cameraFrame.rightVector
+	local fy = cameraFrame.upVector
+	local fz = cameraFrame.lookVector
+
+	local minVect = Vector3.new()
+	local minDist = 512
+
+	for x = 0, 1, 0.5 do
+		for y = 0, 1, 0.5 do
+			local cx = (x - 0.5)*projx
+			local cy = (y - 0.5)*projy
+			local offset = fx*cx - fy*cy + fz
+			local origin = cameraFrame.p + offset*znear
+			local _, hit = Workspace:FindPartOnRay(Ray.new(origin, offset.unit*minDist))
+			local dist = (hit - origin).magnitude
+			if minDist > dist then
+				minDist = dist
+				minVect = offset.unit
+			end
+		end
+	end
+
+	return fz:Dot(minVect)*minDist
+end
+
+------------------------------------------------------------------------
+
+local function StepFreecam(dt)
+	local vel = velSpring:Update(dt, Input.Vel(dt))
+	local pan = panSpring:Update(dt, Input.Pan(dt))
+	local fov = fovSpring:Update(dt, Input.Fov(dt))
+
+	local zoomFactor = sqrt(tan(rad(70/2))/tan(rad(cameraFov/2)))
+
+	cameraFov = clamp(cameraFov + fov*FOV_GAIN*(dt/zoomFactor), 1, 120)
+	cameraRot = cameraRot + pan*PAN_GAIN*(dt/zoomFactor)
+	cameraRot = Vector2.new(clamp(cameraRot.x, -PITCH_LIMIT, PITCH_LIMIT), cameraRot.y%(2*pi))
+
+	local cameraCFrame = CFrame.new(cameraPos)*CFrame.fromOrientation(cameraRot.x, cameraRot.y, 0)*CFrame.new(vel*NAV_GAIN*dt)
+	cameraPos = cameraCFrame.p
+
+	Camera.CFrame = cameraCFrame
+	Camera.Focus = cameraCFrame*CFrame.new(0, 0, -GetFocusDistance(cameraCFrame))
+	Camera.FieldOfView = cameraFov
+end
+
+------------------------------------------------------------------------
+
+local PlayerState = {} do
+	local mouseBehavior
+	local mouseIconEnabled
+	local cameraType
+	local cameraFocus
+	local cameraCFrame
+	local cameraFieldOfView
+	local screenGuis = {}
+	local coreGuis = {
+		Backpack = true,
+		Chat = true,
+		Health = true,
+		PlayerList = true,
+	}
+	local setCores = {
+		BadgesNotificationsActive = true,
+		PointsNotificationsActive = true,
+	}
+
+	-- Save state and set up for freecam
+	function PlayerState.Push()
+		for name in pairs(coreGuis) do
+			coreGuis[name] = StarterGui:GetCoreGuiEnabled(Enum.CoreGuiType[name])
+			StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType[name], false)
+		end
+		for name in pairs(setCores) do
+			setCores[name] = StarterGui:GetCore(name)
+			StarterGui:SetCore(name, false)
+		end
+		local playergui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+		if playergui then
+			for _, gui in pairs(playergui:GetChildren()) do
+				if gui:IsA("ScreenGui") and gui.Enabled then
+					screenGuis[#screenGuis + 1] = gui
+					gui.Enabled = false
+				end
+			end
+		end
+
+		cameraFieldOfView = Camera.FieldOfView
+		Camera.FieldOfView = 70
+
+		cameraType = Camera.CameraType
+		Camera.CameraType = Enum.CameraType.Custom
+
+		cameraCFrame = Camera.CFrame
+		cameraFocus = Camera.Focus
+
+		mouseIconEnabled = UserInputService.MouseIconEnabled
+		UserInputService.MouseIconEnabled = false
+
+		mouseBehavior = UserInputService.MouseBehavior
+		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+	end
+
+	-- Restore state
+	function PlayerState.Pop()
+		for name, isEnabled in pairs(coreGuis) do
+			StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType[name], isEnabled)
+		end
+		for name, isEnabled in pairs(setCores) do
+			StarterGui:SetCore(name, isEnabled)
+		end
+		for _, gui in pairs(screenGuis) do
+			if gui.Parent then
+				gui.Enabled = true
+			end
+		end
+
+		Camera.FieldOfView = cameraFieldOfView
+		cameraFieldOfView = nil
+
+		Camera.CameraType = cameraType
+		cameraType = nil
+
+		Camera.CFrame = cameraCFrame
+		cameraCFrame = nil
+
+		Camera.Focus = cameraFocus
+		cameraFocus = nil
+
+		UserInputService.MouseIconEnabled = mouseIconEnabled
+		mouseIconEnabled = nil
+
+		UserInputService.MouseBehavior = mouseBehavior
+		mouseBehavior = nil
+	end
+end
+
+local function StartFreecam()
+	local cameraCFrame = Camera.CFrame
+	cameraRot = Vector2.new(cameraCFrame:toEulerAnglesYXZ())
+	cameraPos = cameraCFrame.p
+	cameraFov = Camera.FieldOfView
+
+	velSpring:Reset(Vector3.new())
+	panSpring:Reset(Vector2.new())
+	fovSpring:Reset(0)
+
+	PlayerState.Push()
+	RunService:BindToRenderStep("Freecam", Enum.RenderPriority.Camera.Value, StepFreecam)
+	Input.StartCapture()
+end
+
+local function StopFreecam()
+	Input.StopCapture()
+	RunService:UnbindFromRenderStep("Freecam")
+	PlayerState.Pop()
+end
+
+------------------------------------------------------------------------
+
+do
+	local enabled = false
+
+	local function ToggleFreecam()
+		if enabled then
+			StopFreecam()
+		else
+			StartFreecam()
+		end
+		enabled = not enabled
+	end
+
+	local function CheckMacro(macro)
+		for i = 1, #macro - 1 do
+			if not UserInputService:IsKeyDown(macro[i]) then
+				return
+			end
+		end
+		ToggleFreecam()
+	end
+
+	local function HandleActivationInput(action, state, input)
+		if state == Enum.UserInputState.Begin then
+			if input.KeyCode == FREECAM_MACRO_KB[#FREECAM_MACRO_KB] then
+				CheckMacro(FREECAM_MACRO_KB)
+			end
+		end
+		return Enum.ContextActionResult.Pass
+	end
+
+	ContextActionService:BindActionAtPriority("FreecamToggle", HandleActivationInput, false, TOGGLE_INPUT_PRIORITY, FREECAM_MACRO_KB[#FREECAM_MACRO_KB])
+end
+    
+    
+    -- PASTE CONTENT OF SCRIPT 3 ABOVE THIS LINE
+    print("--- Script 3 Finished ---")
+end
+-- ==========================================
+-- SCRIPT 4
+-- ==========================================
+do
+    print("--- Starting Script 4 ---")
+    
+    -- PASTE CONTENT OF SCRIPT 4 BELOW THIS LINE
+	-- Executor-safe HipHeight slider + editable Max
+-- LOCKED + RESPAWN-SAFE + SNAPS NEXT TO "Animation Speed Controller" GUI
+-- PRESS "-" TO HIDE/UNHIDE
+
+if not game:IsLoaded() then
+	game.Loaded:Wait()
+end
+
+-- Services
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+-- Cleanup if re-ran
+local CLEAN_KEY = "__HipHeightSliderGUI_Cleanup"
+local env = (getgenv and getgenv()) or _G
+if env[CLEAN_KEY] then
+	pcall(env[CLEAN_KEY])
+end
+
+-- Config
+local MIN_HIP_HEIGHT = 2.5
+local DEFAULT_HIP_HEIGHT = 2.5
+
+-- User-changeable max
+local maxHipHeight = 200
+local MAX_ALLOWED_HIP_HEIGHT = 1000000
+
+-- Persist current across respawns/restarts
+local currentHipHeight = DEFAULT_HIP_HEIGHT
+
+-- UI visibility state (persist across respawns)
+local uiVisible = true
+
+-- GUI reference
+local currentScreenGui = nil
+
+-- Connections created by startScript
+local scriptConnections = {}
+local function addConn(c) table.insert(scriptConnections, c) return c end
+
+local function disconnectScriptConnections()
+	for _, c in ipairs(scriptConnections) do
+		pcall(function() c:Disconnect() end)
+	end
+	table.clear(scriptConnections)
+end
+
+local function waitForNonZeroAbsoluteSize(guiObj)
+	while guiObj.AbsoluteSize.X <= 0 or guiObj.AbsoluteSize.Y <= 0 do
+		RunService.Heartbeat:Wait()
+	end
+end
+
+-- ===================== POSITION: SNAP NEXT TO OTHER GUI =====================
+local TARGET_GUI_NAME = "AnimSpeedCaptureUI"
+local GAP_PX = 10
+
+local FRAME_W = 380
+local FRAME_H = 200
+
+local FALLBACK_X = 541
+local FALLBACK_Y = 670
+
+local function getViewport()
+	local cam = workspace.CurrentCamera
+	if cam then return cam.ViewportSize end
+	return Vector2.new(1920, 1080)
+end
+
+local function clampToScreen(x, y)
+	local vs = getViewport()
+	x = math.clamp(x, 0, math.max(0, vs.X - FRAME_W))
+	y = math.clamp(y, 0, math.max(0, vs.Y - FRAME_H))
+	return x, y
+end
+
+local function findTargetFrame(playerGui)
+	local targetGui = playerGui:FindFirstChild(TARGET_GUI_NAME)
+	if not targetGui then return nil end
+	return targetGui:FindFirstChildWhichIsA("Frame")
+end
+
+local function computeSnappedPos(playerGui, targetFrame)
+	if targetFrame and targetFrame.AbsoluteSize.X > 0 and targetFrame.AbsoluteSize.Y > 0 then
+		local tx = targetFrame.AbsolutePosition.X
+		local ty = targetFrame.AbsolutePosition.Y
+		local tw = targetFrame.AbsoluteSize.X
+		local th = targetFrame.AbsoluteSize.Y
+
+		local x = tx - FRAME_W - GAP_PX
+		local y = ty + th - FRAME_H
+
+		x, y = clampToScreen(x, y)
+		return UDim2.fromOffset(x, y)
+	end
+
+	local x, y = clampToScreen(FALLBACK_X, FALLBACK_Y)
+	return UDim2.fromOffset(x, y)
+end
+
+local function lockFrameNextToTarget(frame, playerGui)
+	if not frame then return end
+
+	frame.Active = false
+	frame.Draggable = false
+
+	local guarding = false
+	local targetFrame = nil
+
+	local function enforce()
+		if guarding or not frame or not frame.Parent then return end
+		guarding = true
+
+		if (not targetFrame) or (not targetFrame.Parent) then
+			targetFrame = findTargetFrame(playerGui)
+		end
+
+		frame.AnchorPoint = Vector2.new(0, 0)
+		frame.Size = UDim2.fromOffset(FRAME_W, FRAME_H)
+		frame.Position = computeSnappedPos(playerGui, targetFrame)
+		frame.Draggable = false
+
+		guarding = false
+	end
+
+	enforce()
+
+	addConn(frame:GetPropertyChangedSignal("Position"):Connect(enforce))
+	addConn(frame:GetPropertyChangedSignal("Size"):Connect(enforce))
+	addConn(frame:GetPropertyChangedSignal("AnchorPoint"):Connect(enforce))
+	addConn(frame:GetPropertyChangedSignal("Draggable"):Connect(enforce))
+
+	addConn(playerGui.ChildAdded:Connect(function(child)
+		if child.Name == TARGET_GUI_NAME then
+			targetFrame = nil
+			task.defer(enforce)
+		end
+	end))
+	addConn(playerGui.ChildRemoved:Connect(function(child)
+		if child.Name == TARGET_GUI_NAME then
+			targetFrame = nil
+			task.defer(enforce)
+		end
+	end))
+
+	addConn(workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+		task.defer(enforce)
+		local cam = workspace.CurrentCamera
+		if cam then
+			addConn(cam:GetPropertyChangedSignal("ViewportSize"):Connect(enforce))
+		end
+	end))
+	do
+		local cam = workspace.CurrentCamera
+		if cam then
+			addConn(cam:GetPropertyChangedSignal("ViewportSize"):Connect(enforce))
+		end
+	end
+
+	addConn(RunService.Heartbeat:Connect(function()
+		enforce()
+	end))
+end
+-- ==========================================================================
+
+local function startScript()
+	disconnectScriptConnections()
+	if currentScreenGui and currentScreenGui.Parent then
+		currentScreenGui:Destroy()
+	end
+
+	local player = Players.LocalPlayer
+	if not player then return end
+
+	local humanoid = nil
+	local function setHumanoidFromCharacter(char)
+		local h = char:WaitForChild("Humanoid")
+		humanoid = h
+		humanoid.HipHeight = currentHipHeight
+	end
+
+	if player.Character then
+		setHumanoidFromCharacter(player.Character)
+	else
+		setHumanoidFromCharacter(player.CharacterAdded:Wait())
+	end
+
+	addConn(player.CharacterAdded:Connect(function(char)
+		setHumanoidFromCharacter(char)
+	end))
+
+	-- === GUI ===
+	local playerGui = player:WaitForChild("PlayerGui")
+
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "HipHeightSliderGUI"
+	screenGui.ResetOnSpawn = false
+	screenGui.IgnoreGuiInset = true
+	screenGui.Enabled = uiVisible
+	screenGui.Parent = playerGui
+	currentScreenGui = screenGui
+
+	local frame = Instance.new("Frame")
+	frame.Name = "HipHeightControl"
+	frame.Size = UDim2.fromOffset(FRAME_W, FRAME_H)
+	frame.Position = UDim2.fromOffset(FALLBACK_X, FALLBACK_Y) -- will be snapped immediately
+	frame.AnchorPoint = Vector2.new(0, 0)
+	frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+	frame.BackgroundTransparency = 0.1
+	frame.BorderSizePixel = 0
+	frame.Active = true
+	frame.Draggable = false
+	frame.Visible = uiVisible
+	frame.Parent = screenGui
+
+	-- "-" toggle (ignore when typing in a TextBox)
+	local function setUIVisible(v)
+		uiVisible = v
+		if currentScreenGui and currentScreenGui.Parent then
+			currentScreenGui.Enabled = uiVisible
+		end
+		if frame and frame.Parent then
+			frame.Visible = uiVisible
+		end
+	end
+
+	addConn(UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed then return end
+		if UserInputService:GetFocusedTextBox() then return end
+
+		if input.KeyCode == Enum.KeyCode.Minus or input.KeyCode == Enum.KeyCode.KeypadMinus then
+			setUIVisible(not uiVisible)
+		end
+	end))
+
+	-- SNAP + LOCK next to the Animation Speed Controller panel
+	lockFrameNextToTarget(frame, playerGui)
+
+	local uiCorner = Instance.new("UICorner")
+	uiCorner.CornerRadius = UDim.new(0, 10)
+	uiCorner.Parent = frame
+
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Size = UDim2.new(1, 0, 0, 32)
+	titleLabel.Position = UDim2.new(0, 0, 0, 0)
+	titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	titleLabel.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	titleLabel.Font = Enum.Font.SourceSansBold
+	titleLabel.TextSize = 20
+	titleLabel.Parent = frame
+
+	local function refreshTitle()
+		titleLabel.Text = string.format("Hip Height (%.1f-%.0f)", MIN_HIP_HEIGHT, maxHipHeight)
+	end
+	refreshTitle()
+
+	-- Max input row
+	local maxLabel = Instance.new("TextLabel")
+	maxLabel.Size = UDim2.new(0, 60, 0, 26)
+	maxLabel.Position = UDim2.new(0, 10, 0, 40)
+	maxLabel.Text = "Max:"
+	maxLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	maxLabel.BackgroundTransparency = 1
+	maxLabel.Font = Enum.Font.SourceSansBold
+	maxLabel.TextSize = 18
+	maxLabel.TextXAlignment = Enum.TextXAlignment.Left
+	maxLabel.Parent = frame
+
+	local maxBox = Instance.new("TextBox")
+	maxBox.Size = UDim2.new(0, 220, 0, 26)
+	maxBox.Position = UDim2.new(0, 70, 0, 40)
+	maxBox.Text = tostring(maxHipHeight)
+	maxBox.PlaceholderText = "e.g. 10000"
+	maxBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+	maxBox.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+	maxBox.BorderSizePixel = 0
+	maxBox.ClearTextOnFocus = false
+	maxBox.Font = Enum.Font.SourceSans
+	maxBox.TextSize = 18
+	maxBox.Parent = frame
+	Instance.new("UICorner", maxBox).CornerRadius = UDim.new(0, 6)
+
+	local setMaxButton = Instance.new("TextButton")
+	setMaxButton.Size = UDim2.new(0, 70, 0, 26)
+	setMaxButton.Position = UDim2.new(0, 300, 0, 40)
+	setMaxButton.Text = "Set"
+	setMaxButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+	setMaxButton.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+	setMaxButton.BorderSizePixel = 0
+	setMaxButton.Font = Enum.Font.SourceSansBold
+	setMaxButton.TextSize = 18
+	setMaxButton.Parent = frame
+	Instance.new("UICorner", setMaxButton).CornerRadius = UDim.new(0, 6)
+
+	-- Slider track
+	local sliderBackground = Instance.new("Frame")
+	sliderBackground.Name = "SliderTrack"
+	sliderBackground.Size = UDim2.new(0.9, 0, 0, 10)
+	sliderBackground.Position = UDim2.new(0.5, 0, 0, 100)
+	sliderBackground.AnchorPoint = Vector2.new(0.5, 0)
+	sliderBackground.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+	sliderBackground.BorderSizePixel = 0
+	sliderBackground.Active = true
+	sliderBackground.Parent = frame
+
+	-- Slider knob
+	local sliderKnob = Instance.new("TextButton")
+	sliderKnob.Name = "SliderKnob"
+	sliderKnob.Size = UDim2.new(0, 20, 0, 25)
+	sliderKnob.Position = UDim2.new(0, 0, 0.5, 0)
+	sliderKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+	sliderKnob.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+	sliderKnob.Text = ""
+	sliderKnob.BorderSizePixel = 0
+	sliderKnob.AutoButtonColor = false
+	sliderKnob.ZIndex = 2
+	sliderKnob.Parent = sliderBackground
+	Instance.new("UICorner", sliderKnob).CornerRadius = UDim.new(0, 5)
+
+	-- Value label
+	local valueLabel = Instance.new("TextLabel")
+	valueLabel.Size = UDim2.new(1, 0, 0, 28)
+	valueLabel.Position = UDim2.new(0, 0, 0, 135)
+	valueLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	valueLabel.BackgroundTransparency = 1
+	valueLabel.Font = Enum.Font.SourceSans
+	valueLabel.TextSize = 18
+	valueLabel.Parent = frame
+
+	waitForNonZeroAbsoluteSize(sliderBackground)
+	waitForNonZeroAbsoluteSize(sliderKnob)
+
+	local isDragging = false
+
+	local function updateLabel()
+		valueLabel.Text = string.format("Hip Height: %.2f", currentHipHeight)
+	end
+
+	local function updateKnobPosition(newPosition)
+		local trackWidth = sliderBackground.AbsoluteSize.X
+		local knobHalf = sliderKnob.AbsoluteSize.X / 2
+
+		local minX = knobHalf
+		local maxX = trackWidth - knobHalf
+		if maxX <= minX then return end
+
+		local clampedX = math.clamp(newPosition, minX, maxX)
+		sliderKnob.Position = UDim2.new(0, clampedX, 0.5, 0)
+
+		local ratio = (clampedX - minX) / (maxX - minX)
+		local range = (maxHipHeight - MIN_HIP_HEIGHT)
+		if range <= 0 then return end
+
+		currentHipHeight = MIN_HIP_HEIGHT + ratio * range
+		currentHipHeight = math.clamp(currentHipHeight, MIN_HIP_HEIGHT, maxHipHeight)
+
+		if humanoid and humanoid.Parent then
+			humanoid.HipHeight = currentHipHeight
+		end
+
+		updateLabel()
+	end
+
+	local function setKnobFromHipHeight(hh)
+		local trackWidth = sliderBackground.AbsoluteSize.X
+		local knobHalf = sliderKnob.AbsoluteSize.X / 2
+
+		local minX = knobHalf
+		local maxX = trackWidth - knobHalf
+		if maxX <= minX then return end
+
+		local range = (maxHipHeight - MIN_HIP_HEIGHT)
+		if range <= 0 then return end
+
+		hh = math.clamp(hh, MIN_HIP_HEIGHT, maxHipHeight)
+		local ratio = (hh - MIN_HIP_HEIGHT) / range
+		ratio = math.clamp(ratio, 0, 1)
+
+		local x = minX + ratio * (maxX - minX)
+		updateKnobPosition(x)
+	end
+
+	updateLabel()
+	setKnobFromHipHeight(currentHipHeight)
+
+	local function applyMaxFromInput()
+		local newMax = tonumber(maxBox.Text)
+		if not newMax then
+			maxBox.Text = tostring(maxHipHeight)
+			return
+		end
+
+		newMax = math.clamp(newMax, MIN_HIP_HEIGHT + 0.01, MAX_ALLOWED_HIP_HEIGHT)
+		maxHipHeight = newMax
+		maxBox.Text = tostring(maxHipHeight)
+		refreshTitle()
+
+		currentHipHeight = math.clamp(currentHipHeight, MIN_HIP_HEIGHT, maxHipHeight)
+		if humanoid and humanoid.Parent then
+			humanoid.HipHeight = currentHipHeight
+		end
+		setKnobFromHipHeight(currentHipHeight)
+	end
+
+	addConn(setMaxButton.MouseButton1Click:Connect(applyMaxFromInput))
+	addConn(maxBox.FocusLost:Connect(function(enterPressed)
+		if enterPressed then
+			applyMaxFromInput()
+		end
+	end))
+
+	-- Drag logic
+	addConn(sliderKnob.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			isDragging = true
+			sliderKnob.ZIndex = 3
+		end
+	end))
+
+	addConn(UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			isDragging = false
+			sliderKnob.ZIndex = 2
+		end
+	end))
+
+	addConn(UserInputService.InputChanged:Connect(function(input)
+		if isDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local mouseX = input.Position.X
+			local trackX = sliderBackground.AbsolutePosition.X
+			updateKnobPosition(mouseX - trackX)
+		end
+	end))
+
+	addConn(sliderBackground.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			local mouseX = input.Position.X
+			local trackX = sliderBackground.AbsolutePosition.X
+			updateKnobPosition(mouseX - trackX)
+		end
+	end))
+end
+
+startScript()
+
+-- Cleanup hook (for re-execution)
+env[CLEAN_KEY] = function()
+	disconnectScriptConnections()
+	if currentScreenGui and currentScreenGui.Parent then
+		pcall(function() currentScreenGui:Destroy() end)
+	end
+	currentScreenGui = nil
+end
+    
+    
+    -- PASTE CONTENT OF SCRIPT 4 ABOVE THIS LINE
+    print("--- Script 4 Finished ---")
+end
+
+print("Done! All 4 scripts have been executed.")
+do
+	local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+
+-- SETTINGS
+local ResetKey = Enum.KeyCode.Equals -- Key: =
+
+print("!!! Perfect Instant Reset Active !!!")
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if input.KeyCode == ResetKey and not gameProcessed then
+        
+        local char = LocalPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChild("Humanoid")
+        
+        if root and hum then
+            -- 1. SAVE POSITION & CAMERA ANGLE
+            local savedCFrame = root.CFrame
+            local savedCamCFrame = workspace.CurrentCamera.CFrame
+            
+            -- 2. RESET
+            hum.Health = 0
+            
+            -- 3. WAIT FOR NEW CHARACTER
+            local connection
+            connection = LocalPlayer.CharacterAdded:Connect(function(newChar)
+                connection:Disconnect() 
+                
+                local newRoot = newChar:WaitForChild("HumanoidRootPart", 10)
+                
+                if newRoot then
+                    -- 4. THE "SMOOTH" RESTORE
+                    -- We use task.defer to run the teleport at the very first physics frame
+                    task.defer(function()
+                        newRoot.CFrame = savedCFrame
+                        workspace.CurrentCamera.CFrame = savedCamCFrame
+                        
+                        -- Optional: Stop any gravity/velocity carryover
+                        newRoot.AssemblyLinearVelocity = Vector3.zero
+                    end)
+                    
+                    -- 5. THE ANTI-GLITCH TAP
+                    -- One more silent check slightly later to ensure the map didn't pull you away
+                    for i = 1, 3 do
+                        task.wait(0.03)
+                        if newRoot then
+                            newRoot.CFrame = savedCFrame
+                        end
+                    end
+                end
+            end)
+        end
+    end
+end)
+end
